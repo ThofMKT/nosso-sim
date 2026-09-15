@@ -26,6 +26,8 @@ type Local = {
   whatsapp?: string | null;
   instagram?: string | null;
   site?: string | null;
+  rating?: number | null;
+  reviewCount?: number | null;
   salvo?: boolean;
   visitaAgendada?: boolean;
 };
@@ -440,14 +442,15 @@ export default function LocaisPage() {
                     <span className="flex items-center gap-1">
                       <Users size={11} /> {local.capacidade}
                     </span>
-                    <span className="flex items-center gap-1">
-                      <DollarSign size={11} /> {local.faixaPreco}
-                    </span>
-                    <div className="flex items-center gap-0.5 ml-auto">
-                      {[1, 2, 3, 4, 5].map((s) => (
-                        <Star key={s} size={10} className={s <= 4 ? "fill-[#d4a017] text-[#d4a017]" : "text-[#f2dc93]"} />
-                      ))}
-                    </div>
+                    {local.rating ? (
+                      <span className="flex items-center gap-1 ml-auto">
+                        <Star size={11} className="fill-[#d4a017] text-[#d4a017]" />
+                        <span className="font-semibold text-[#1a1208]">{local.rating.toFixed(1)}</span>
+                        {local.reviewCount && <span className="text-[#c9a84c]">({local.reviewCount})</span>}
+                      </span>
+                    ) : (
+                      <span className="text-[#c9a84c] text-[10px] ml-auto">Sem avaliações</span>
+                    )}
                   </div>
                 </div>
 

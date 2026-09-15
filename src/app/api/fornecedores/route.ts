@@ -1,59 +1,103 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest, NextResponse } from "next/server";
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+type SerperPlace = {
+  title: string;
+  address?: string;
+  rating?: number;
+  ratingCount?: number;
+  category?: string;
+  phoneNumber?: string;
+  website?: string;
+  description?: string;
+};
+
+const CATEGORIA_QUERIES: Record<string, string> = {
+  Fotografia: "fotógrafo filmagem casamento",
+  Buffet: "buffet gastronomia casamento",
+  Decoração: "decoração floricultura casamento",
+  Música: "DJ banda ao vivo casamento",
+  Bolo: "confeitaria bolo casamento noiva",
+  Cerimonialista: "cerimonialista assessoria casamento",
+  Beleza: "maquiagem cabelo penteado noiva",
+  Transporte: "carro noiva transporte casamento",
+};
+
+function formatPhone(phone?: string): string | null {
+  if (!phone) return null;
+  const digits = phone.replace(/\D/g, "");
+  if (digits.length < 8) return null;
+  const local = digits.startsWith("55") ? digits.slice(2) : digits;
+  if (local.length === 11) return `(${local.slice(0,2)}) ${local.slice(2,7)}-${local.slice(7)}`;
+  if (local.length === 10) return `(${local.slice(0,2)}) ${local.slice(2,6)}-${local.slice(6)}`;
+  return phone;
+}
+
+function formatWhatsApp(phone?: string): string | null {
+  if (!phone) return null;
+  const digits = phone.replace(/\D/g, "");
+  if (digits.length < 8) return null;
+  if (digits.startsWith("55")) return digits;
+  return "55" + digits;
+}
+
+function extrairBairro(address?: string, cidade?: string): string {
+  if (!address) return cidade ?? "";
+  const partes = address.split(",").map(s => s.trim());
+  if (partes.length >= 2) return partes[1];
+  return partes[0];
+}
 
 export async function POST(req: NextRequest) {
-  const { categoria, cidade, orcamento, convidados } = await req.json();
+  const { categoria, cidade } = await req.json();
 
-  const orcamentoLabel: Record<string, string> = {
-    "15000": "até R$ 15 mil",
-    "30000": "R$ 15–30 mil",
-    "60000": "R$ 30–60 mil",
-    "100000": "R$ 60–100 mil",
-    "150000": "acima de R$ 100 mil",
-  };
-
-  const prompt = `Você é especialista em fornecedores de casamento no Brasil.
-Sugira 6 fornecedores da categoria "${categoria}" em "${cidade}" para um casamento com ${convidados} convidados e orçamento ${orcamentoLabel[orcamento] ?? orcamento}.
-
-REGRA IMPORTANTE: NÃO invente telefones, WhatsApp, Instagram ou sites. Deixe todos como null. Os contatos reais serão buscados pelo usuário via Google.
-
-Prefira nomes reais e conhecidos da região quando tiver certeza. Se não tiver certeza sobre um nome específico, use nomes genéricos típicos da categoria e região.
-
-Responda SOMENTE com JSON válido (array), sem markdown:
-[
-  {
-    "nome": "Nome do Fornecedor",
-    "especialidade": "Descrição curta da especialidade",
-    "bairro": "Bairro ou região onde atua",
-    "descricao": "Uma frase de destaque ou diferencial",
-    "precoMin": 3000,
-    "precoMax": 8000,
-    "avaliacao": 4.8,
-    "telefone": null,
-    "whatsapp": null,
-    "instagram": null,
-    "site": null,
-    "adequado": true
+  if (!process.env.SERPER_API_KEY) {
+    return NextResponse.json(
+      { error: "Chave de busca não configurada no servidor. Contate o administrador." },
+      { status: 500 }
+    );
   }
-]
 
-Para precoMin/precoMax use números inteiros sem R$.
-Garanta JSON válido e parseável.`;
+  const queryBase = CATEGORIA_QUERIES[categoria] ?? `${categoria} casamento`;
+  const query = `${queryBase} ${cidade}`;
 
   try {
-    const message = await client.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 2048,
-      messages: [{ role: "user", content: prompt }],
+    const res = await fetch("https://google.serper.dev/places", {
+      method: "POST",
+      headers: {
+        "X-API-KEY": process.env.SERPER_API_KEY,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ q: query, gl: "br", hl: "pt-br", num: 10 }),
     });
 
-    const raw = (message.content[0] as { type: string; text: string }).text.trim();
-    const match = raw.match(/\[[\s\S]*\]/);
-    if (!match) throw new Error("JSON não encontrado na resposta");
+    if (!res.ok) throw new Error(`Serper error: ${res.status}`);
 
-    const fornecedores = JSON.parse(match[0]);
+    const data = await res.json();
+    const places: SerperPlace[] = data.places ?? [];
+
+    if (places.length === 0) {
+      return NextResponse.json(
+        { error: `Nenhum fornecedor de ${categoria} encontrado em "${cidade}". Tente buscar em uma cidade maior próxima.` },
+        { status: 404 }
+      );
+    }
+
+    const fornecedores = places.slice(0, 8).map((p) => ({
+      nome: p.title,
+      especialidade: p.category ?? categoria,
+      bairro: extrairBairro(p.address, cidade),
+      descricao: p.description ?? `${p.category ?? categoria} em ${cidade}`,
+      precoMin: 0,
+      precoMax: 0,
+      avaliacao: p.rating ?? 0,
+      telefone: formatPhone(p.phoneNumber),
+      whatsapp: formatWhatsApp(p.phoneNumber),
+      instagram: null,
+      site: p.website ?? null,
+      adequado: (p.rating ?? 0) >= 4.3,
+      reviewCount: p.ratingCount ?? null,
+    }));
+
     return NextResponse.json({ fornecedores });
   } catch (err) {
     console.error("Erro API fornecedores:", err);

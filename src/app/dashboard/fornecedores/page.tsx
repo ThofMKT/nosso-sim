@@ -24,6 +24,7 @@ type Fornecedor = {
   instagram?: string | null;
   site?: string | null;
   adequado: boolean;
+  reviewCount?: number | null;
   salvo?: boolean;
 };
 
@@ -55,14 +56,14 @@ function formatPreco(min: number, max: number) {
   return `${fmt(min)} – ${fmt(max)}`;
 }
 
-function Estrelas({ nota }: { nota: number }) {
+function AvaliacaoGoogle({ nota, total }: { nota: number; total?: number | null }) {
+  if (!nota) return <span className="text-[10px] text-[#c9a84c]">Sem avaliações</span>;
   return (
-    <div className="flex items-center gap-0.5">
-      {[1, 2, 3, 4, 5].map((s) => (
-        <Star key={s} size={10} className={s <= Math.round(nota) ? "fill-[#d4a017] text-[#d4a017]" : "text-[#f2dc93]"} />
-      ))}
-      <span className="text-[10px] text-[#9a6e0a] ml-1">{nota.toFixed(1)}</span>
-    </div>
+    <span className="flex items-center gap-1 text-xs">
+      <Star size={11} className="fill-[#d4a017] text-[#d4a017]" />
+      <span className="font-semibold text-[#1a1208]">{nota.toFixed(1)}</span>
+      {total ? <span className="text-[#c9a84c]">({total} no Google)</span> : null}
+    </span>
   );
 }
 
@@ -396,10 +397,7 @@ export default function FornecedoresPage() {
                   <p className="text-sm text-[#664708] italic mb-3">&ldquo;{f.descricao}&rdquo;</p>
 
                   <div className="flex items-center gap-3 text-xs text-[#9a6e0a] flex-wrap">
-                    <Estrelas nota={f.avaliacao} />
-                    <span className="flex items-center gap-1">
-                      <DollarSign size={11} /> {formatPreco(f.precoMin, f.precoMax)}
-                    </span>
+                    <AvaliacaoGoogle nota={f.avaliacao} total={f.reviewCount} />
                     <span className="flex items-center gap-1 ml-auto">
                       <MapPin size={10} /> {f.bairro}
                     </span>
