@@ -14,35 +14,51 @@ export async function POST(req: NextRequest) {
     "150000": "acima de R$ 100 mil",
   };
 
-  const prompt = `Você é um assistente especialista em casamentos no Brasil.
-Sugira 6 opções reais de espaços para festa de casamento em "${cidade}" para ${convidados} convidados com orçamento ${orcamentoLabel[orcamento] ?? orcamento}.
+  const prompt = `Você é especialista em casamentos no Brasil. Sugira 6 espaços para festa de casamento em "${cidade}" para ${convidados} convidados com orçamento ${orcamentoLabel[orcamento] ?? orcamento}.
 
-Responda SOMENTE com JSON válido, sem markdown, no seguinte formato:
+Use nomes reais e conhecidos de espaços da cidade quando souber. Inclua dados de contato realistas e típicos da região.
+
+Responda SOMENTE com JSON válido (array), sem markdown, sem texto adicional, exatamente neste formato:
 [
   {
     "nome": "Nome do Espaço",
-    "tipo": "Salão" | "Fazenda" | "Jardim" | "Clube" | "Hotel" | "Haras",
+    "tipo": "Salão",
     "bairro": "Bairro ou região",
+    "endereco": "Rua e número ou referência de localização",
     "capacidade": "até 200 pessoas",
     "faixaPreco": "R$ 8.000 – R$ 15.000",
-    "destaque": "Uma frase curta de destaque",
+    "destaque": "Uma frase curta sobre o diferencial do espaço",
+    "telefone": "(11) 99999-9999",
+    "whatsapp": "5511999999999",
+    "instagram": "@nomeDoEspaco",
+    "site": "https://nomeespaco.com.br",
     "adequado": true
   }
 ]
 
-Se não souber espaços exatos da cidade, crie sugestões realistas e típicas da região.`;
+Tipos válidos: "Salão", "Fazenda", "Jardim", "Clube", "Hotel", "Haras".
+Para telefone/whatsapp/instagram/site: use null se não souber dados reais da cidade.
+Garanta que o JSON seja válido e parseável.`;
 
   try {
     const message = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 1024,
+      max_tokens: 2048,
       messages: [{ role: "user", content: prompt }],
     });
 
-    const text = (message.content[0] as { type: string; text: string }).text;
-    const locais = JSON.parse(text);
+    const raw = (message.content[0] as { type: string; text: string }).text.trim();
+    // Extrai JSON mesmo que venha com texto extra
+    const match = raw.match(/\[[\s\S]*\]/);
+    if (!match) throw new Error("JSON não encontrado na resposta");
+
+    const locais = JSON.parse(match[0]);
     return NextResponse.json({ locais });
-  } catch {
-    return NextResponse.json({ error: "Erro ao buscar locais" }, { status: 500 });
+  } catch (err) {
+    console.error("Erro API locais:", err);
+    return NextResponse.json(
+      { error: "Não consegui buscar espaços agora. Tente novamente em instantes." },
+      { status: 500 }
+    );
   }
 }

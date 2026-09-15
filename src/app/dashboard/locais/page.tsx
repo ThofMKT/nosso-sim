@@ -6,7 +6,10 @@ import Link from "next/link";
 import {
   MapPin, Search, Sparkles, Star, Users, DollarSign,
   ChevronRight, Loader2, RefreshCw, CheckCircle2,
+  Phone, MessageCircle, Globe, Bookmark, BookmarkCheck,
+  CalendarCheck, AlertCircle,
 } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
 
 const MapaLocais = dynamic(() => import("@/components/MapaLocais"), { ssr: false });
 
@@ -14,10 +17,25 @@ type Local = {
   nome: string;
   tipo: string;
   bairro: string;
+  endereco?: string | null;
   capacidade: string;
   faixaPreco: string;
   destaque: string;
   adequado: boolean;
+  telefone?: string | null;
+  whatsapp?: string | null;
+  instagram?: string | null;
+  site?: string | null;
+  salvo?: boolean;
+  visitaAgendada?: boolean;
+};
+
+type LocalData = {
+  cidade: string;
+  orcamento: string;
+  convidados: string;
+  locais: Local[];
+  atualizadoEm: string;
 };
 
 type Coords = { lat: number; lng: number };
@@ -29,9 +47,7 @@ async function geocodeCidade(cidade: string): Promise<Coords | null> {
       { headers: { "Accept-Language": "pt-BR" } }
     );
     const data = await res.json();
-    if (data.length > 0) {
-      return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
-    }
+    if (data.length > 0) return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
   } catch {}
   return null;
 }
@@ -45,6 +61,37 @@ const TIPO_CORES: Record<string, string> = {
   Haras: "bg-orange-50 text-orange-700",
 };
 
+async function carregarDoSupabase(): Promise<LocalData | null> {
+  try {
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return null;
+    const { data: casal } = await supabase
+      .from("casais")
+      .select("locais_data")
+      .eq("user_id", user.id)
+      .single();
+    if (casal?.locais_data) return JSON.parse(casal.locais_data) as LocalData;
+  } catch {}
+  // fallback: localStorage
+  const local = localStorage.getItem("nosso-sim-locais");
+  if (local) return JSON.parse(local) as LocalData;
+  return null;
+}
+
+async function salvarNoBanco(dados: LocalData) {
+  localStorage.setItem("nosso-sim-locais", JSON.stringify(dados));
+  try {
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    await supabase
+      .from("casais")
+      .update({ locais_data: JSON.stringify(dados) })
+      .eq("user_id", user.id);
+  } catch {}
+}
+
 export default function LocaisPage() {
   const [cidade, setCidade] = useState("");
   const [cidadeInput, setCidadeInput] = useState("");
@@ -54,17 +101,34 @@ export default function LocaisPage() {
   const [locais, setLocais] = useState<Local[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMapa, setLoadingMapa] = useState(false);
+  const [loadingInicial, setLoadingInicial] = useState(true);
   const [localSelecionado, setLocalSelecionado] = useState<string | null>(null);
   const [etapa, setEtapa] = useState<"cidade" | "mapa" | "lista">("cidade");
+  const [erro, setErro] = useState<string | null>(null);
 
   useEffect(() => {
-    const stored = localStorage.getItem("nosso-sim-onboarding");
-    if (stored) {
-      const d = JSON.parse(stored);
-      setCidadeInput(d.cidade ?? "");
-      setOrcamento(d.orcamento ?? "60000");
-      setConvidados(d.convidados ?? "200");
+    async function init() {
+      const stored = localStorage.getItem("nosso-sim-onboarding");
+      if (stored) {
+        const d = JSON.parse(stored);
+        setCidadeInput(d.cidade ?? "");
+        setOrcamento(d.orcamento ?? "60000");
+        setConvidados(d.convidados ?? "200");
+      }
+      const dados = await carregarDoSupabase();
+      if (dados?.locais?.length) {
+        setLocais(dados.locais);
+        setCidade(dados.cidade);
+        setCidadeInput(dados.cidade);
+        setOrcamento(dados.orcamento);
+        setConvidados(dados.convidados);
+        const c = await geocodeCidade(dados.cidade);
+        setCoords(c ?? { lat: -23.5505, lng: -46.6333 });
+        setEtapa("lista");
+      }
+      setLoadingInicial(false);
     }
+    init();
   }, []);
 
   async function buscarCidade() {
@@ -79,7 +143,7 @@ export default function LocaisPage() {
 
   async function buscarLocaisIA() {
     setLoading(true);
-    setLocais([]);
+    setErro(null);
     try {
       const res = await fetch("/api/locais", {
         method: "POST",
@@ -87,14 +151,48 @@ export default function LocaisPage() {
         body: JSON.stringify({ cidade, orcamento, convidados }),
       });
       const data = await res.json();
-      if (data.locais) {
-        setLocais(data.locais);
+      if (!res.ok || data.error) {
+        setErro(data.error ?? "Erro ao buscar espaços. Tente novamente.");
+        setLoading(false);
+        return;
+      }
+      if (data.locais && Array.isArray(data.locais)) {
+        // Preserva marcações de salvo/visita se já existiam
+        const locaisComMarcacoes = (data.locais as Local[]).map((novo) => {
+          const anterior = locais.find(l => l.nome === novo.nome);
+          return { ...novo, salvo: anterior?.salvo, visitaAgendada: anterior?.visitaAgendada };
+        });
+        setLocais(locaisComMarcacoes);
         setEtapa("lista");
+        const novosDados: LocalData = {
+          cidade,
+          orcamento,
+          convidados,
+          locais: locaisComMarcacoes,
+          atualizadoEm: new Date().toISOString(),
+        };
+        await salvarNoBanco(novosDados);
       }
     } catch {
-      setLocais([]);
+      setErro("Não consegui conectar ao servidor. Verifique sua conexão e tente novamente.");
     }
     setLoading(false);
+  }
+
+  async function toggleSalvo(nome: string) {
+    const atualizados = locais.map(l =>
+      l.nome === nome ? { ...l, salvo: !l.salvo } : l
+    );
+    setLocais(atualizados);
+    await salvarNoBanco({ cidade, orcamento, convidados, locais: atualizados, atualizadoEm: new Date().toISOString() });
+  }
+
+  async function toggleVisita(nome: string) {
+    const atualizados = locais.map(l =>
+      l.nome === nome ? { ...l, visitaAgendada: !l.visitaAgendada } : l
+    );
+    setLocais(atualizados);
+    await salvarNoBanco({ cidade, orcamento, convidados, locais: atualizados, atualizadoEm: new Date().toISOString() });
   }
 
   function useGeolocalizacao() {
@@ -118,6 +216,16 @@ export default function LocaisPage() {
     );
   }
 
+  if (loadingInicial) {
+    return (
+      <div className="min-h-screen bg-[#fdf9ee] flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-[#f2dc93] border-t-[#d4a017] rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  const locaisSalvos = locais.filter(l => l.salvo);
+
   return (
     <div className="min-h-screen bg-[#fdf9ee] pb-24">
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-5">
@@ -134,7 +242,7 @@ export default function LocaisPage() {
             </span>
           </div>
           <p className="text-[#9a6e0a] text-sm">
-            Encontre espaços disponíveis na sua região com sugestões personalizadas.
+            Sugestões personalizadas de espaços na sua cidade, salvas automaticamente.
           </p>
         </div>
 
@@ -181,7 +289,7 @@ export default function LocaisPage() {
                 {cidade}
               </p>
               <button
-                onClick={() => { setEtapa("cidade"); setCoords(null); setLocais([]); }}
+                onClick={() => { setEtapa("cidade"); setCoords(null); setLocais([]); setErro(null); }}
                 className="text-xs text-[#9a6e0a] hover:text-[#d4a017]"
               >
                 Trocar cidade
@@ -191,6 +299,17 @@ export default function LocaisPage() {
             <div className="p-4">
               <MapaLocais lat={coords.lat} lng={coords.lng} cidade={cidade} />
             </div>
+
+            {/* Erro da IA */}
+            {erro && (
+              <div className="mx-5 mb-4 flex items-start gap-2.5 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+                <AlertCircle size={16} className="text-red-500 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-semibold text-red-700">Não consegui buscar os espaços</p>
+                  <p className="text-xs text-red-600 mt-0.5">{erro}</p>
+                </div>
+              </div>
+            )}
 
             <div className="px-5 pb-5">
               <button
@@ -214,6 +333,24 @@ export default function LocaisPage() {
           </div>
         )}
 
+        {/* Favoritos */}
+        {locaisSalvos.length > 0 && (
+          <div className="bg-[#fdf9ee] border border-[#f2dc93] rounded-2xl p-4">
+            <p className="text-xs font-bold text-[#9a6e0a] mb-3 flex items-center gap-1.5">
+              <Bookmark size={12} className="fill-[#d4a017] text-[#d4a017]" />
+              {locaisSalvos.length} espaço{locaisSalvos.length > 1 ? "s" : ""} salvos
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {locaisSalvos.map((l, i) => (
+                <span key={i} className="text-xs bg-white border border-[#f2dc93] text-[#664708] px-2.5 py-1 rounded-full font-medium">
+                  {l.nome}
+                  {l.visitaAgendada && <span className="ml-1 text-[#d4a017]">· visita ✓</span>}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* ETAPA 3 — Lista de Locais */}
         {locais.length > 0 && (
           <div className="space-y-4">
@@ -224,77 +361,188 @@ export default function LocaisPage() {
               </p>
               <button
                 onClick={buscarLocaisIA}
-                className="flex items-center gap-1 text-xs text-[#d4a017] hover:text-[#b8860b] font-medium"
+                disabled={loading}
+                className="flex items-center gap-1 text-xs text-[#d4a017] hover:text-[#b8860b] font-medium disabled:opacity-50"
               >
-                <RefreshCw size={11} /> Atualizar
+                <RefreshCw size={11} className={loading ? "animate-spin" : ""} /> Atualizar
               </button>
             </div>
+
+            {/* Erro inline quando atualiza e falha */}
+            {erro && etapa === "lista" && (
+              <div className="flex items-start gap-2.5 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+                <AlertCircle size={16} className="text-red-500 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-semibold text-red-700">Não consegui atualizar</p>
+                  <p className="text-xs text-red-600 mt-0.5">{erro} Os resultados anteriores foram mantidos.</p>
+                </div>
+              </div>
+            )}
 
             {locais.map((local, i) => (
               <div
                 key={i}
-                onClick={() => setLocalSelecionado(localSelecionado === local.nome ? null : local.nome)}
-                className={`bg-white rounded-2xl border-2 p-5 cursor-pointer transition-all ${
+                className={`bg-white rounded-2xl border-2 transition-all ${
                   localSelecionado === local.nome
                     ? "border-[#d4a017] shadow-md"
                     : "border-[#f9efcc] hover:border-[#eac85a]"
                 }`}
               >
-                <div className="flex items-start justify-between gap-3 mb-3">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 flex-wrap mb-1">
-                      <h3 className="font-bold text-[#1a1208]">{local.nome}</h3>
-                      {local.adequado && (
-                        <span className="text-[10px] font-bold bg-[#fdf9ee] text-[#b8860b] border border-[#f2dc93] px-2 py-0.5 rounded-full">
-                          Recomendado
+                {/* Cabeçalho do card — clicável */}
+                <div
+                  className="p-5 cursor-pointer"
+                  onClick={() => setLocalSelecionado(localSelecionado === local.nome ? null : local.nome)}
+                >
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 flex-wrap mb-1">
+                        <h3 className="font-bold text-[#1a1208]">{local.nome}</h3>
+                        {local.adequado && (
+                          <span className="text-[10px] font-bold bg-[#fdf9ee] text-[#b8860b] border border-[#f2dc93] px-2 py-0.5 rounded-full">
+                            Recomendado
+                          </span>
+                        )}
+                        {local.salvo && (
+                          <span className="text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full flex items-center gap-0.5">
+                            <Bookmark size={8} className="fill-amber-600" /> Salvo
+                          </span>
+                        )}
+                        {local.visitaAgendada && (
+                          <span className="text-[10px] font-bold bg-green-50 text-green-700 border border-green-200 px-2 py-0.5 rounded-full flex items-center gap-0.5">
+                            <CalendarCheck size={8} /> Visita
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${TIPO_CORES[local.tipo] ?? "bg-gray-50 text-gray-600"}`}>
+                          {local.tipo}
                         </span>
+                        <span className="text-xs text-[#9a6e0a] flex items-center gap-1">
+                          <MapPin size={10} /> {local.bairro}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex-shrink-0">
+                      {localSelecionado === local.nome ? (
+                        <div className="w-7 h-7 rounded-full bg-[#d4a017] flex items-center justify-center">
+                          <CheckCircle2 size={16} className="text-white" />
+                        </div>
+                      ) : (
+                        <div className="w-7 h-7 rounded-full border-2 border-[#f2dc93]" />
                       )}
                     </div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${TIPO_CORES[local.tipo] ?? "bg-gray-50 text-gray-600"}`}>
-                        {local.tipo}
-                      </span>
-                      <span className="text-xs text-[#9a6e0a] flex items-center gap-1">
-                        <MapPin size={10} /> {local.bairro}
-                      </span>
+                  </div>
+
+                  <p className="text-sm text-[#664708] italic mb-3">&ldquo;{local.destaque}&rdquo;</p>
+
+                  <div className="flex items-center gap-4 text-xs text-[#9a6e0a]">
+                    <span className="flex items-center gap-1">
+                      <Users size={11} /> {local.capacidade}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <DollarSign size={11} /> {local.faixaPreco}
+                    </span>
+                    <div className="flex items-center gap-0.5 ml-auto">
+                      {[1, 2, 3, 4, 5].map((s) => (
+                        <Star key={s} size={10} className={s <= 4 ? "fill-[#d4a017] text-[#d4a017]" : "text-[#f2dc93]"} />
+                      ))}
                     </div>
                   </div>
-
-                  <div className="flex-shrink-0">
-                    {localSelecionado === local.nome ? (
-                      <div className="w-7 h-7 rounded-full bg-[#d4a017] flex items-center justify-center">
-                        <CheckCircle2 size={16} className="text-white" />
-                      </div>
-                    ) : (
-                      <div className="w-7 h-7 rounded-full border-2 border-[#f2dc93]" />
-                    )}
-                  </div>
                 </div>
 
-                <p className="text-sm text-[#664708] italic mb-3">&ldquo;{local.destaque}&rdquo;</p>
-
-                <div className="flex items-center gap-4 text-xs text-[#9a6e0a]">
-                  <span className="flex items-center gap-1">
-                    <Users size={11} /> {local.capacidade}
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <DollarSign size={11} /> {local.faixaPreco}
-                  </span>
-                  <div className="flex items-center gap-0.5 ml-auto">
-                    {[1,2,3,4,5].map((s) => (
-                      <Star key={s} size={10} className={s <= 4 ? "fill-[#d4a017] text-[#d4a017]" : "text-[#f2dc93]"} />
-                    ))}
-                  </div>
-                </div>
-
+                {/* Detalhes expandidos */}
                 {localSelecionado === local.nome && (
-                  <div className="mt-4 pt-4 border-t border-[#f9efcc] flex gap-2">
-                    <button className="flex-1 bg-[#d4a017] hover:bg-[#b8860b] text-white font-bold text-sm py-2.5 rounded-xl transition-all flex items-center justify-center gap-2">
-                      <ChevronRight size={14} /> Marcar visita
-                    </button>
-                    <button className="px-4 bg-[#fdf9ee] hover:bg-[#f9efcc] text-[#9a6e0a] font-medium text-sm py-2.5 rounded-xl transition-all">
-                      Salvar
-                    </button>
+                  <div className="border-t border-[#f9efcc] px-5 pb-5 pt-4 space-y-4">
+
+                    {/* Endereço */}
+                    {local.endereco && (
+                      <div className="flex items-start gap-2 text-sm text-[#664708]">
+                        <MapPin size={14} className="text-[#d4a017] flex-shrink-0 mt-0.5" />
+                        <span>{local.endereco}</span>
+                      </div>
+                    )}
+
+                    {/* Contatos */}
+                    {(local.telefone || local.whatsapp || local.instagram || local.site) && (
+                      <div className="grid grid-cols-2 gap-2">
+                        {local.telefone && (
+                          <a
+                            href={`tel:${local.telefone.replace(/\D/g, "")}`}
+                            className="flex items-center gap-2 bg-[#fdf9ee] border border-[#f2dc93] rounded-xl px-3 py-2.5 text-xs font-medium text-[#664708] hover:bg-[#f9efcc] transition-all"
+                          >
+                            <Phone size={13} className="text-[#d4a017]" />
+                            <span className="truncate">{local.telefone}</span>
+                          </a>
+                        )}
+                        {local.whatsapp && (
+                          <a
+                            href={`https://wa.me/${local.whatsapp.replace(/\D/g, "")}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-xl px-3 py-2.5 text-xs font-medium text-green-700 hover:bg-green-100 transition-all"
+                          >
+                            <MessageCircle size={13} className="text-green-600" />
+                            <span>WhatsApp</span>
+                          </a>
+                        )}
+                        {local.instagram && (
+                          <a
+                            href={`https://instagram.com/${local.instagram.replace("@", "")}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-2 bg-pink-50 border border-pink-200 rounded-xl px-3 py-2.5 text-xs font-medium text-pink-700 hover:bg-pink-100 transition-all"
+                          >
+                            <span className="text-pink-600 font-bold text-sm">@</span>
+                            <span className="truncate">{local.instagram}</span>
+                          </a>
+                        )}
+                        {local.site && (
+                          <a
+                            href={local.site}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2.5 text-xs font-medium text-blue-700 hover:bg-blue-100 transition-all"
+                          >
+                            <Globe size={13} className="text-blue-600" />
+                            <span>Site</span>
+                          </a>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Aviso IA */}
+                    <p className="text-[10px] text-[#c9a84c] flex items-center gap-1">
+                      <Sparkles size={9} /> Sugestão da IA — confirme os dados antes de entrar em contato.
+                    </p>
+
+                    {/* Ações */}
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        onClick={() => toggleVisita(local.nome)}
+                        className={`flex-1 font-bold text-sm py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 ${
+                          local.visitaAgendada
+                            ? "bg-green-600 hover:bg-green-700 text-white"
+                            : "bg-[#d4a017] hover:bg-[#b8860b] text-white"
+                        }`}
+                      >
+                        <CalendarCheck size={14} />
+                        {local.visitaAgendada ? "Visita marcada ✓" : "Marcar visita"}
+                      </button>
+                      <button
+                        onClick={() => toggleSalvo(local.nome)}
+                        className={`px-4 font-medium text-sm py-2.5 rounded-xl transition-all flex items-center gap-1.5 ${
+                          local.salvo
+                            ? "bg-amber-100 border border-amber-300 text-amber-700"
+                            : "bg-[#fdf9ee] hover:bg-[#f9efcc] border border-[#f2dc93] text-[#9a6e0a]"
+                        }`}
+                      >
+                        {local.salvo
+                          ? <><BookmarkCheck size={14} /> Salvo</>
+                          : <><Bookmark size={14} /> Salvar</>
+                        }
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
