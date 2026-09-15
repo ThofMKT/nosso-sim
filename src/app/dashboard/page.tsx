@@ -5,7 +5,7 @@ import Link from "next/link";
 import {
   Heart, Calendar, DollarSign, Users, CheckCircle2,
   Sparkles, ChevronRight, TrendingUp, MapPin, Lock,
-  ChevronDown, Clock,
+  ChevronDown, Clock, RefreshCw,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
@@ -104,25 +104,100 @@ const ETAPAS = [
   },
 ];
 
+const DICA_CACHE_KEY = "nosso-sim-dica";
+const DICA_TTL = 8 * 60 * 60 * 1000; // 8 horas
+
+function getCachedDica(): string | null {
+  try {
+    const raw = localStorage.getItem(DICA_CACHE_KEY);
+    if (!raw) return null;
+    const { dica, ts } = JSON.parse(raw);
+    if (Date.now() - ts < DICA_TTL) return dica as string;
+  } catch {}
+  return null;
+}
+
+function setCachedDica(dica: string) {
+  try {
+    localStorage.setItem(DICA_CACHE_KEY, JSON.stringify({ dica, ts: Date.now() }));
+  } catch {}
+}
+
 export default function DashboardPage() {
   const [data, setData] = useState<CasalData | null>(null);
   const [guiaAberto, setGuiaAberto] = useState(true);
   const [etapaConcluida] = useState(0);
+  const [tarefasConcluidas, setTarefasConcluidas] = useState(0);
+  const [tarefasTotal, setTarefasTotal] = useState(0);
+  const [dica, setDica] = useState<string | null>(null);
+  const [dicaLoading, setDicaLoading] = useState(false);
 
   useEffect(() => {
     async function carregarCasal() {
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-      const { data: casal } = await supabase
-        .from("casais")
-        .select("*")
-        .eq("user_id", user.id)
-        .single();
+
+      const [{ data: casal }, { count: total }, { count: concluidas }] = await Promise.all([
+        supabase.from("casais").select("*").eq("user_id", user.id).single(),
+        supabase.from("tarefas").select("id", { count: "exact", head: true }).eq("user_id", user.id),
+        supabase.from("tarefas").select("id", { count: "exact", head: true }).eq("user_id", user.id).eq("done", true),
+      ]);
+
       if (casal) setData(casal as CasalData);
+      setTarefasTotal(total ?? 0);
+      setTarefasConcluidas(concluidas ?? 0);
     }
     carregarCasal();
   }, []);
+
+  useEffect(() => {
+    if (!data) return;
+    const cached = getCachedDica();
+    if (cached) { setDica(cached); return; }
+    gerarDica(data, tarefasConcluidas, tarefasTotal);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+
+  async function gerarDica(casal: CasalData, concluidas: number, total: number, forcar = false) {
+    if (dicaLoading) return;
+    if (!forcar) {
+      const cached = getCachedDica();
+      if (cached) { setDica(cached); return; }
+    }
+    setDicaLoading(true);
+    try {
+      const diasRestantes = getDaysUntil(casal.data_evento);
+      const temLocal = !!localStorage.getItem("nosso-sim-locais");
+      const temFornecedor = !!localStorage.getItem("nosso-sim-fornecedores");
+      const coresObj = casal.cores_casamento ? JSON.parse(casal.cores_casamento) : {};
+
+      const res = await fetch("/api/dica", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          noivo1: casal.noivo1,
+          noivo2: casal.noivo2,
+          cidade: casal.cidade,
+          orcamento: casal.orcamento,
+          convidados: casal.convidados,
+          diasRestantes,
+          estilo: coresObj.tema ?? casal.estilo_casamento ?? "classico",
+          tempoJuntos: casal.tempo_juntos ?? null,
+          tarefasConcluidas: concluidas,
+          tarefasTotal: total,
+          temLocal,
+          temFornecedor,
+        }),
+      });
+      const json = await res.json();
+      if (json.dica) {
+        setDica(json.dica);
+        setCachedDica(json.dica);
+      }
+    } catch {}
+    setDicaLoading(false);
+  }
 
   if (!data) {
     return (
@@ -315,7 +390,7 @@ export default function DashboardPage() {
           {[
             { icon: <Calendar size={16} />, label: "Dias", value: daysLeft },
             { icon: <Users size={16} />, label: "Convidados", value: data.convidados },
-            { icon: <CheckCircle2 size={16} />, label: "Tarefas", value: "0/16" },
+            { icon: <CheckCircle2 size={16} />, label: "Tarefas", value: tarefasTotal > 0 ? `${tarefasConcluidas}/${tarefasTotal}` : "–" },
           ].map((s) => (
             <div key={s.label} className="bg-white rounded-2xl border border-[#f9efcc] p-4 text-center">
               <div className="flex justify-center text-[#d4a017] mb-2">{s.icon}</div>
@@ -354,24 +429,51 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* DICA IA */}
+        {/* DICA IA PERSONALIZADA */}
         <div className="bg-[#1a1208] rounded-2xl p-5">
-          <div className="flex items-center gap-2 mb-3">
-            <Sparkles size={14} className="text-[#d4a017]" />
-            <span className="text-xs font-bold text-[#eac85a] uppercase tracking-wide">Dica do Nosso Sim</span>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Sparkles size={14} className="text-[#d4a017]" />
+              <span className="text-xs font-bold text-[#eac85a] uppercase tracking-wide">Dica personalizada</span>
+            </div>
+            <button
+              onClick={() => gerarDica(data, tarefasConcluidas, tarefasTotal, true)}
+              disabled={dicaLoading}
+              className="flex items-center gap-1 text-[10px] text-[#9a6e0a] hover:text-[#d4a017] transition-colors disabled:opacity-40"
+            >
+              <RefreshCw size={10} className={dicaLoading ? "animate-spin" : ""} />
+              Nova dica
+            </button>
           </div>
-          <p className="text-white text-sm leading-relaxed">
-            Com <strong className="text-[#d4a017]">{daysLeft} dias</strong> para o casamento de{" "}
-            <strong>{data.noivo1} & {data.noivo2}</strong>
-            {data.estilo_casamento && ` — estilo ${ESTILO_LABELS[data.estilo_casamento] ?? data.estilo_casamento}`},
-            comece pelo espaço da festa. Tudo depende dele: buffet, decoração e o número exato de convidados.
-          </p>
-          <Link
-            href="/dashboard/locais"
-            className="mt-4 inline-flex items-center gap-2 bg-[#d4a017] hover:bg-[#b8860b] text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-colors"
-          >
-            <MapPin size={13} /> Buscar espaços em {data.cidade}
-          </Link>
+
+          {dicaLoading ? (
+            <div className="flex items-center gap-3 py-2">
+              <div className="w-4 h-4 border-2 border-[#d4a017]/30 border-t-[#d4a017] rounded-full animate-spin flex-shrink-0" />
+              <span className="text-[#9a6e0a] text-sm">Gerando dica personalizada...</span>
+            </div>
+          ) : dica ? (
+            <p className="text-white text-sm leading-relaxed">{dica}</p>
+          ) : (
+            <p className="text-[#9a6e0a] text-sm">
+              Com <strong className="text-[#d4a017]">{daysLeft} dias</strong> para o casamento,
+              comece pelo espaço da festa — tudo depende dele.
+            </p>
+          )}
+
+          <div className="flex gap-2 mt-4">
+            <Link
+              href="/dashboard/locais"
+              className="inline-flex items-center gap-2 bg-[#d4a017] hover:bg-[#b8860b] text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-colors"
+            >
+              <MapPin size={13} /> Espaços em {data.cidade}
+            </Link>
+            <Link
+              href="/dashboard/tarefas"
+              className="inline-flex items-center gap-2 bg-white/10 hover:bg-white/20 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-colors"
+            >
+              <CheckCircle2 size={13} /> Ver tarefas
+            </Link>
+          </div>
         </div>
 
       </div>
