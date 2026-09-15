@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import {
   MapPin, Search, Sparkles, Star, Users, DollarSign,
   ChevronRight, Loader2, RefreshCw, CheckCircle2,

@@ -144,18 +144,16 @@ export async function signIn(formData: { email: string; password: string }) {
         admin.from("orcamento_itens").select("id", { count: "exact", head: true }).eq("user_id", data.user.id),
       ]);
 
-      const inserts: Promise<unknown>[] = [];
       if (!cT || cT === 0) {
-        inserts.push(admin.from("tarefas").insert(
+        await admin.from("tarefas").insert(
           TAREFAS_PADRAO.map((t) => ({ ...t, user_id: data.user.id, done: false }))
-        ));
+        );
       }
       if (!cO || cO === 0) {
-        inserts.push(admin.from("orcamento_itens").insert(
+        await admin.from("orcamento_itens").insert(
           ORCAMENTO_PADRAO.map((o) => ({ ...o, user_id: data.user.id, valor_gasto: 0 }))
-        ));
+        );
       }
-      if (inserts.length > 0) await Promise.all(inserts);
     }
   }
 
