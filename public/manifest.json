@@ -1,0 +1,26 @@
+{
+  "name": "Nosso Sim — Planejamento de Casamento",
+  "short_name": "Nosso Sim",
+  "description": "Planeje seu casamento do zero ao altar com IA",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#fdf9ee",
+  "theme_color": "#d4a017",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "categories": ["lifestyle", "productivity"],
+  "lang": "pt-BR"
+}
