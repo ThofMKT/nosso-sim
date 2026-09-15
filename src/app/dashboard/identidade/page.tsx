@@ -90,14 +90,22 @@ const FONTES = [
   { id: "cursive", nome: "Cursiva", estilo: "cursive", preview: "A & B" },
 ];
 
+type CoresJson = {
+  nome?: string;
+  cores?: string[];
+  tema?: string;
+  fonte?: string;
+};
+
 export default function IdentidadePage() {
-  const [noivo1, setNoivo1] = useState("A");
-  const [noivo2, setNoivo2] = useState("C");
-  const [nomeCompleto1, setNomeCompleto1] = useState("Ana");
-  const [nomeCompleto2, setNomeCompleto2] = useState("Carlos");
+  const [noivo1, setNoivo1] = useState("");
+  const [noivo2, setNoivo2] = useState("");
+  const [nomeCompleto1, setNomeCompleto1] = useState("");
+  const [nomeCompleto2, setNomeCompleto2] = useState("");
   const [temaSelecionado, setTemaSelecionado] = useState("classico");
   const [fonteSelecionada, setFonteSelecionada] = useState("playfair");
   const [paletaOnboarding, setPaletaOnboarding] = useState<PaletaOnboarding | null>(null);
+  const [coresJsonAtual, setCoresJsonAtual] = useState<CoresJson>({});
   const [copiado, setCopiado] = useState(false);
   const [salvo, setSalvo] = useState(false);
   const [baixando, setBaixando] = useState(false);
@@ -110,33 +118,40 @@ export default function IdentidadePage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { setCarregando(false); return; }
 
+      // Seleciona apenas colunas garantidas (tema e fonte são guardados dentro do JSON de cores_casamento)
       const { data: casal } = await supabase
         .from("casais")
-        .select("noivo1, noivo2, estilo_casamento, cores_casamento, tema, fonte")
+        .select("noivo1, noivo2, estilo_casamento, cores_casamento")
         .eq("user_id", user.id)
         .single();
 
       if (casal) {
-        setNoivo1(casal.noivo1?.charAt(0).toUpperCase() ?? "A");
-        setNoivo2(casal.noivo2?.charAt(0).toUpperCase() ?? "C");
-        setNomeCompleto1(casal.noivo1 ?? "Ana");
-        setNomeCompleto2(casal.noivo2 ?? "Carlos");
+        const n1 = casal.noivo1 ?? "";
+        const n2 = casal.noivo2 ?? "";
+        setNoivo1(n1.charAt(0).toUpperCase());
+        setNoivo2(n2.charAt(0).toUpperCase());
+        setNomeCompleto1(n1);
+        setNomeCompleto2(n2);
 
-        // Usa tema salvo ou deriva do estilo do onboarding
-        const temaInicial = casal.tema ?? casal.estilo_casamento ?? "classico";
-        const temaValido = TEMAS.find(t => t.id === temaInicial) ? temaInicial : "classico";
-        setTemaSelecionado(temaValido);
-
-        if (casal.fonte) setFonteSelecionada(casal.fonte);
-
+        let coresObj: CoresJson = {};
         if (casal.cores_casamento) {
           try {
-            const p = JSON.parse(casal.cores_casamento) as PaletaOnboarding;
-            if (p.cores && p.cores.length > 0) setPaletaOnboarding(p);
-          } catch {
-            // ignora parse error
-          }
+            coresObj = JSON.parse(casal.cores_casamento) as CoresJson;
+          } catch { /* ignora */ }
         }
+        setCoresJsonAtual(coresObj);
+
+        // Paleta escolhida no onboarding
+        if (coresObj.cores && coresObj.cores.length > 0) {
+          setPaletaOnboarding({ nome: coresObj.nome ?? "Sua paleta", cores: coresObj.cores });
+        }
+
+        // Tema: prefere o salvo em cores_casamento.tema, depois estilo_casamento, depois "classico"
+        const temaInicial = coresObj.tema ?? casal.estilo_casamento ?? "classico";
+        setTemaSelecionado(TEMAS.find(t => t.id === temaInicial)?.id ?? "classico");
+
+        // Fonte: prefere o salvo em cores_casamento.fonte
+        if (coresObj.fonte) setFonteSelecionada(coresObj.fonte);
       }
       setCarregando(false);
     }
@@ -157,10 +172,23 @@ export default function IdentidadePage() {
     const supabase = createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
+
+    // Salva tema e fonte dentro do JSON de cores_casamento (preservando paleta e nome)
+    const novoJson: CoresJson = {
+      ...coresJsonAtual,
+      tema: temaSelecionado,
+      fonte: fonteSelecionada,
+    };
+
     await supabase
       .from("casais")
-      .update({ tema: temaSelecionado, fonte: fonteSelecionada })
+      .update({
+        estilo_casamento: temaSelecionado,
+        cores_casamento: JSON.stringify(novoJson),
+      })
       .eq("user_id", user.id);
+
+    setCoresJsonAtual(novoJson);
     setSalvo(true);
     setTimeout(() => setSalvo(false), 2000);
   }
@@ -175,18 +203,15 @@ export default function IdentidadePage() {
       canvas.height = size;
       const ctx = canvas.getContext("2d")!;
 
-      // Fundo
       ctx.fillStyle = tema.fundo;
       ctx.fillRect(0, 0, size, size);
 
-      // Gradiente sutil
       const grad = ctx.createRadialGradient(size * 0.3, size * 0.3, 0, size * 0.5, size * 0.5, size * 0.7);
       grad.addColorStop(0, "rgba(255,255,255,0.08)");
       grad.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, size, size);
 
-      // Iniciais
       const fontFamily = fonteSelecionada === "playfair"
         ? "Playfair Display, Georgia, serif"
         : fonteSelecionada === "cursive"
@@ -197,15 +222,14 @@ export default function IdentidadePage() {
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.font = `bold 220px ${fontFamily}`;
-      ctx.fillText(`${noivo1}`, size * 0.3, size * 0.42);
+      ctx.fillText(noivo1 || "A", size * 0.3, size * 0.42);
       ctx.font = `normal 80px ${fontFamily}`;
       ctx.globalAlpha = 0.6;
       ctx.fillText("&", size * 0.5, size * 0.42);
       ctx.globalAlpha = 1;
       ctx.font = `bold 220px ${fontFamily}`;
-      ctx.fillText(`${noivo2}`, size * 0.7, size * 0.42);
+      ctx.fillText(noivo2 || "B", size * 0.7, size * 0.42);
 
-      // Linha decorativa
       ctx.globalAlpha = 0.3;
       ctx.strokeStyle = tema.texto;
       ctx.lineWidth = 1;
@@ -215,19 +239,18 @@ export default function IdentidadePage() {
       ctx.stroke();
       ctx.globalAlpha = 1;
 
-      // Nomes completos
       ctx.font = `18px ${fontFamily}`;
-      ctx.letterSpacing = "8px";
       ctx.fillStyle = tema.texto;
       ctx.globalAlpha = 0.7;
+      const nome1 = nomeCompleto1 || "Noivo 1";
+      const nome2 = nomeCompleto2 || "Noivo 2";
       ctx.fillText(
-        `${nomeCompleto1.toUpperCase()} & ${nomeCompleto2.toUpperCase()}`,
+        `${nome1.toUpperCase()} & ${nome2.toUpperCase()}`,
         size * 0.5,
         size * 0.68
       );
       ctx.globalAlpha = 1;
 
-      // Coração
       ctx.font = "20px serif";
       ctx.fillStyle = tema.acento;
       ctx.fillText("♥", size * 0.5, size * 0.77);
@@ -235,7 +258,7 @@ export default function IdentidadePage() {
       const url = canvas.toDataURL("image/png");
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${nomeCompleto1}_${nomeCompleto2}_monograma.png`;
+      a.download = `${nome1}_${nome2}_monograma.png`;
       a.click();
     } finally {
       setBaixando(false);
@@ -251,6 +274,7 @@ export default function IdentidadePage() {
   }
 
   const coresExibidas = paletaOnboarding?.cores?.length ? paletaOnboarding.cores : tema.cores;
+  const nomePaleta = paletaOnboarding?.nome ?? tema.nome;
 
   return (
     <div className="min-h-screen bg-[#fdf9ee] pb-24">
@@ -282,14 +306,14 @@ export default function IdentidadePage() {
             <div className="relative text-center px-6 py-8">
               <div className="leading-none mb-3 flex items-center justify-center gap-2"
                 style={{ color: tema.texto, fontFamily: fonte.estilo }}>
-                <span className="text-[80px] sm:text-[96px] font-bold">{noivo1}</span>
+                <span className="text-[80px] sm:text-[96px] font-bold">{noivo1 || "A"}</span>
                 <span className="text-3xl font-light opacity-50 pb-4">&</span>
-                <span className="text-[80px] sm:text-[96px] font-bold">{noivo2}</span>
+                <span className="text-[80px] sm:text-[96px] font-bold">{noivo2 || "B"}</span>
               </div>
 
               <p className="text-xs sm:text-sm font-medium tracking-[0.25em] uppercase opacity-60"
                 style={{ color: tema.texto, fontFamily: fonte.estilo }}>
-                {nomeCompleto1} & {nomeCompleto2}
+                {nomeCompleto1 || "Noivo 1"} & {nomeCompleto2 || "Noivo 2"}
               </p>
 
               <div className="flex items-center gap-3 justify-center mt-3">
@@ -312,36 +336,34 @@ export default function IdentidadePage() {
           </button>
         </div>
 
-        {/* PALETA DO CASAMENTO (da escolha no onboarding) */}
-        {paletaOnboarding && paletaOnboarding.cores.length > 0 && (
-          <div className="bg-white rounded-2xl border border-[#f9efcc] p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <p className="font-semibold text-[#1a1208] text-sm flex items-center gap-2">
-                  <Palette size={15} className="text-[#d4a017]" /> Paleta do casamento
-                </p>
-                <p className="text-[#9a6e0a] text-xs mt-0.5">{paletaOnboarding.nome}</p>
-              </div>
-              <button
-                onClick={copiarCores}
-                className="text-xs text-[#d4a017] hover:text-[#b8860b] font-medium flex items-center gap-1"
-              >
-                {copiado ? <><Check size={11} /> Copiado!</> : "Copiar hex"}
-              </button>
+        {/* PALETA — sempre visível (onboarding ou do tema) */}
+        <div className="bg-white rounded-2xl border border-[#f9efcc] p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <p className="font-semibold text-[#1a1208] text-sm flex items-center gap-2">
+                <Palette size={15} className="text-[#d4a017]" /> Paleta do casamento
+              </p>
+              <p className="text-[#9a6e0a] text-xs mt-0.5">{nomePaleta}</p>
             </div>
-            <div className="flex gap-2">
-              {coresExibidas.map((cor, i) => (
-                <div key={i} className="flex-1 text-center">
-                  <div
-                    className="w-full aspect-square rounded-xl border border-black/5 shadow-sm mb-1.5"
-                    style={{ background: cor }}
-                  />
-                  <p className="text-[9px] text-[#9a6e0a] font-mono">{cor}</p>
-                </div>
-              ))}
-            </div>
+            <button
+              onClick={copiarCores}
+              className="text-xs text-[#d4a017] hover:text-[#b8860b] font-medium flex items-center gap-1"
+            >
+              {copiado ? <><Check size={11} /> Copiado!</> : "Copiar hex"}
+            </button>
           </div>
-        )}
+          <div className="flex gap-2">
+            {coresExibidas.map((cor, i) => (
+              <div key={i} className="flex-1 text-center">
+                <div
+                  className="w-full aspect-square rounded-xl border border-black/5 shadow-sm mb-1.5"
+                  style={{ background: cor }}
+                />
+                <p className="text-[9px] text-[#9a6e0a] font-mono">{cor}</p>
+              </div>
+            ))}
+          </div>
+        </div>
 
         {/* TEMAS */}
         <div className="bg-white rounded-2xl border border-[#f9efcc] p-5">
@@ -400,31 +422,6 @@ export default function IdentidadePage() {
             ))}
           </div>
         </div>
-
-        {/* Paleta do tema (quando não tem paleta de onboarding) */}
-        {!paletaOnboarding && (
-          <div className="bg-white rounded-2xl border border-[#f9efcc] p-5">
-            <div className="flex items-center justify-between mb-4">
-              <p className="font-semibold text-[#1a1208] text-sm flex items-center gap-2">
-                <Palette size={15} className="text-[#d4a017]" /> Paleta do tema
-              </p>
-              <button
-                onClick={copiarCores}
-                className="text-xs text-[#d4a017] hover:text-[#b8860b] font-medium flex items-center gap-1"
-              >
-                {copiado ? <><Check size={11} /> Copiado!</> : "Copiar hex"}
-              </button>
-            </div>
-            <div className="flex gap-2">
-              {tema.cores.map((cor, i) => (
-                <div key={i} className="flex-1 text-center">
-                  <div className="w-full aspect-square rounded-xl border border-black/5 shadow-sm mb-1.5" style={{ background: cor }} />
-                  <p className="text-[9px] text-[#9a6e0a] font-mono">{cor}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
 
         <button
           onClick={salvar}
