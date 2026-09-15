@@ -71,20 +71,29 @@ async function carregarDoSupabase(): Promise<FornecedoresDB | null> {
     const supabase = createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return null;
-    const { data: casal } = await supabase
+
+    // Tenta com a coluna fornecedores_data (pode não existir ainda)
+    const { data, error } = await supabase
       .from("casais")
       .select("fornecedores_data, cidade, orcamento, convidados")
       .eq("user_id", user.id)
       .single();
-    if (casal?.fornecedores_data) return JSON.parse(casal.fornecedores_data) as FornecedoresDB;
-    if (casal) {
-      return {
-        cidade: casal.cidade ?? "",
-        orcamento: String(casal.orcamento ?? "60000"),
-        convidados: String(casal.convidados ?? "200"),
-        categorias: {},
-      };
+
+    if (error || !data) {
+      // Fallback: colunas garantidas apenas
+      const { data: base } = await supabase
+        .from("casais")
+        .select("cidade, orcamento, convidados")
+        .eq("user_id", user.id)
+        .single();
+      if (base) {
+        return { cidade: base.cidade ?? "", orcamento: String(base.orcamento ?? "60000"), convidados: String(base.convidados ?? "200"), categorias: {} };
+      }
+      return null;
     }
+
+    if (data.fornecedores_data) return JSON.parse(data.fornecedores_data) as FornecedoresDB;
+    return { cidade: data.cidade ?? "", orcamento: String(data.orcamento ?? "60000"), convidados: String(data.convidados ?? "200"), categorias: {} };
   } catch {}
   const local = localStorage.getItem("nosso-sim-fornecedores");
   if (local) return JSON.parse(local) as FornecedoresDB;
@@ -111,20 +120,25 @@ export default function FornecedoresPage() {
 
   useEffect(() => {
     async function init() {
-      const dados = await carregarDoSupabase();
-      if (dados) {
-        setDb(dados);
-        const primeiraComDados = Object.keys(dados.categorias)[0];
-        if (primeiraComDados) setCategoriaSelecionada(primeiraComDados);
-      }
-      if (!dados?.cidade) {
-        const stored = localStorage.getItem("nosso-sim-onboarding");
-        if (stored) {
-          const d = JSON.parse(stored);
-          setDb(prev => ({ ...prev, cidade: d.cidade ?? "", orcamento: d.orcamento ?? "60000", convidados: d.convidados ?? "200" }));
+      try {
+        const dados = await carregarDoSupabase();
+        if (dados) {
+          setDb(dados);
+          const primeiraComDados = Object.keys(dados.categorias)[0];
+          if (primeiraComDados) setCategoriaSelecionada(primeiraComDados);
         }
+        if (!dados?.cidade) {
+          const stored = localStorage.getItem("nosso-sim-onboarding");
+          if (stored) {
+            const d = JSON.parse(stored);
+            setDb(prev => ({ ...prev, cidade: d.cidade ?? "", orcamento: d.orcamento ?? "60000", convidados: d.convidados ?? "200" }));
+          }
+        }
+      } catch {
+        // falha silenciosa — página funciona sem dados do banco
+      } finally {
+        setLoadingInicial(false);
       }
-      setLoadingInicial(false);
     }
     init();
   }, []);
