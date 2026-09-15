@@ -16,28 +16,29 @@ export async function POST(req: NextRequest) {
 
   const prompt = `Você é especialista em casamentos no Brasil. Sugira 6 espaços para festa de casamento em "${cidade}" para ${convidados} convidados com orçamento ${orcamentoLabel[orcamento] ?? orcamento}.
 
-Use nomes reais e conhecidos de espaços da cidade quando souber. Inclua dados de contato realistas e típicos da região.
+REGRA IMPORTANTE: NÃO invente telefones, WhatsApp, Instagram ou sites. Deixe todos como null. Apenas informe nome, tipo, bairro, endereço aproximado, capacidade, faixa de preço e destaque.
 
-Responda SOMENTE com JSON válido (array), sem markdown, sem texto adicional, exatamente neste formato:
+Prefira nomes reais e conhecidos da cidade quando tiver certeza. Se não tiver certeza sobre um nome específico, use nomes genéricos típicos da região.
+
+Responda SOMENTE com JSON válido (array), sem markdown, sem texto adicional:
 [
   {
     "nome": "Nome do Espaço",
     "tipo": "Salão",
     "bairro": "Bairro ou região",
-    "endereco": "Rua e número ou referência de localização",
+    "endereco": "Referência de localização (bairro, via principal ou ponto de referência)",
     "capacidade": "até 200 pessoas",
     "faixaPreco": "R$ 8.000 – R$ 15.000",
     "destaque": "Uma frase curta sobre o diferencial do espaço",
-    "telefone": "(11) 99999-9999",
-    "whatsapp": "5511999999999",
-    "instagram": "@nomeDoEspaco",
-    "site": "https://nomeespaco.com.br",
+    "telefone": null,
+    "whatsapp": null,
+    "instagram": null,
+    "site": null,
     "adequado": true
   }
 ]
 
 Tipos válidos: "Salão", "Fazenda", "Jardim", "Clube", "Hotel", "Haras".
-Para telefone/whatsapp/instagram/site: use null se não souber dados reais da cidade.
 Garanta que o JSON seja válido e parseável.`;
 
   try {

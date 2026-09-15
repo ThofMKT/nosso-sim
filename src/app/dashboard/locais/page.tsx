@@ -7,7 +7,7 @@ import {
   MapPin, Search, Sparkles, Star, Users, DollarSign,
   ChevronRight, Loader2, RefreshCw, CheckCircle2,
   Phone, MessageCircle, Globe, Bookmark, BookmarkCheck,
-  CalendarCheck, AlertCircle,
+  CalendarCheck, AlertCircle, ExternalLink,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
@@ -463,58 +463,52 @@ export default function LocaisPage() {
                       </div>
                     )}
 
-                    {/* Contatos */}
-                    {(local.telefone || local.whatsapp || local.instagram || local.site) && (
+                    {/* Buscar contatos reais no Google */}
+                    <div className="space-y-2">
+                      <p className="text-[11px] font-semibold text-[#9a6e0a] uppercase tracking-wide">Buscar contatos reais</p>
                       <div className="grid grid-cols-2 gap-2">
-                        {local.telefone && (
-                          <a
-                            href={`tel:${local.telefone.replace(/\D/g, "")}`}
-                            className="flex items-center gap-2 bg-[#fdf9ee] border border-[#f2dc93] rounded-xl px-3 py-2.5 text-xs font-medium text-[#664708] hover:bg-[#f9efcc] transition-all"
-                          >
-                            <Phone size={13} className="text-[#d4a017]" />
-                            <span className="truncate">{local.telefone}</span>
-                          </a>
-                        )}
-                        {local.whatsapp && (
-                          <a
-                            href={`https://wa.me/${local.whatsapp.replace(/\D/g, "")}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-xl px-3 py-2.5 text-xs font-medium text-green-700 hover:bg-green-100 transition-all"
-                          >
-                            <MessageCircle size={13} className="text-green-600" />
-                            <span>WhatsApp</span>
-                          </a>
-                        )}
-                        {local.instagram && (
-                          <a
-                            href={`https://instagram.com/${local.instagram.replace("@", "")}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-2 bg-pink-50 border border-pink-200 rounded-xl px-3 py-2.5 text-xs font-medium text-pink-700 hover:bg-pink-100 transition-all"
-                          >
-                            <span className="text-pink-600 font-bold text-sm">@</span>
-                            <span className="truncate">{local.instagram}</span>
-                          </a>
-                        )}
-                        {local.site && (
-                          <a
-                            href={local.site}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2.5 text-xs font-medium text-blue-700 hover:bg-blue-100 transition-all"
-                          >
-                            <Globe size={13} className="text-blue-600" />
-                            <span>Site</span>
-                          </a>
-                        )}
+                        <a
+                          href={`https://www.google.com/maps/search/${encodeURIComponent(local.nome + " " + local.bairro + " " + cidade)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2.5 text-xs font-medium text-blue-700 hover:bg-blue-100 transition-all"
+                        >
+                          <MapPin size={13} className="text-blue-600 flex-shrink-0" />
+                          <span>Google Maps</span>
+                          <ExternalLink size={10} className="ml-auto opacity-60" />
+                        </a>
+                        <a
+                          href={`https://www.google.com/search?q=${encodeURIComponent(local.nome + " " + cidade + " espaço casamento contato")}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2 bg-[#fdf9ee] border border-[#f2dc93] rounded-xl px-3 py-2.5 text-xs font-medium text-[#664708] hover:bg-[#f9efcc] transition-all"
+                        >
+                          <Globe size={13} className="text-[#d4a017] flex-shrink-0" />
+                          <span>Pesquisar</span>
+                          <ExternalLink size={10} className="ml-auto opacity-60" />
+                        </a>
+                        <a
+                          href={`https://www.instagram.com/explore/search/?q=${encodeURIComponent(local.nome)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2 bg-pink-50 border border-pink-200 rounded-xl px-3 py-2.5 text-xs font-medium text-pink-700 hover:bg-pink-100 transition-all"
+                        >
+                          <span className="text-pink-600 font-bold text-sm flex-shrink-0">@</span>
+                          <span>Instagram</span>
+                          <ExternalLink size={10} className="ml-auto opacity-60" />
+                        </a>
+                        <a
+                          href={`https://wa.me/?text=${encodeURIComponent("Olá! Vi o " + local.nome + " e gostaria de saber disponibilidade para casamento.")}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-xl px-3 py-2.5 text-xs font-medium text-green-700 hover:bg-green-100 transition-all"
+                        >
+                          <MessageCircle size={13} className="text-green-600 flex-shrink-0" />
+                          <span>WhatsApp</span>
+                          <ExternalLink size={10} className="ml-auto opacity-60" />
+                        </a>
                       </div>
-                    )}
-
-                    {/* Aviso IA */}
-                    <p className="text-[10px] text-[#c9a84c] flex items-center gap-1">
-                      <Sparkles size={9} /> Sugestão da IA — confirme os dados antes de entrar em contato.
-                    </p>
+                    </div>
 
                     {/* Ações */}
                     <div className="flex gap-2 pt-1">

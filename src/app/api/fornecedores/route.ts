@@ -17,28 +17,29 @@ export async function POST(req: NextRequest) {
   const prompt = `Você é especialista em fornecedores de casamento no Brasil.
 Sugira 6 fornecedores da categoria "${categoria}" em "${cidade}" para um casamento com ${convidados} convidados e orçamento ${orcamentoLabel[orcamento] ?? orcamento}.
 
-Use nomes realistas e típicos da região. Inclua dados de contato plausíveis.
+REGRA IMPORTANTE: NÃO invente telefones, WhatsApp, Instagram ou sites. Deixe todos como null. Os contatos reais serão buscados pelo usuário via Google.
+
+Prefira nomes reais e conhecidos da região quando tiver certeza. Se não tiver certeza sobre um nome específico, use nomes genéricos típicos da categoria e região.
 
 Responda SOMENTE com JSON válido (array), sem markdown:
 [
   {
     "nome": "Nome do Fornecedor",
-    "especialidade": "Descrição curta da especialidade (ex: Fotografia documental e ensaios)",
+    "especialidade": "Descrição curta da especialidade",
     "bairro": "Bairro ou região onde atua",
     "descricao": "Uma frase de destaque ou diferencial",
     "precoMin": 3000,
     "precoMax": 8000,
     "avaliacao": 4.8,
-    "telefone": "(11) 99999-9999",
-    "whatsapp": "5511999999999",
-    "instagram": "@nomefornecedor",
-    "site": "https://site.com.br",
+    "telefone": null,
+    "whatsapp": null,
+    "instagram": null,
+    "site": null,
     "adequado": true
   }
 ]
 
 Para precoMin/precoMax use números inteiros sem R$.
-Para telefone/whatsapp/instagram/site: use null se não souber dados reais.
 Garanta JSON válido e parseável.`;
 
   try {
