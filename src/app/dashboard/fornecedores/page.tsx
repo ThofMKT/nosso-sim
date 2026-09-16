@@ -37,6 +37,8 @@ type FornecedoresDB = {
   cidade: string;
   orcamento: string;
   convidados: string;
+  lat?: number;
+  lng?: number;
   categorias: Record<string, CategoriaData>;
 };
 
@@ -135,6 +137,17 @@ export default function FornecedoresPage() {
             setDb(prev => ({ ...prev, cidade: d.cidade ?? "", orcamento: d.orcamento ?? "60000", convidados: d.convidados ?? "200" }));
           }
         }
+        // Pega coordenadas salvas na busca de locais (para Overpass)
+        if (!dados?.lat) {
+          const locaisCache = localStorage.getItem("nosso-sim-locais");
+          if (locaisCache) {
+            const locaisData = JSON.parse(locaisCache);
+            // Coordenadas ficam salvas no locais_data se disponíveis
+            if (locaisData?.lat && locaisData?.lng) {
+              setDb(prev => ({ ...prev, lat: locaisData.lat, lng: locaisData.lng }));
+            }
+          }
+        }
       } catch {
         // falha silenciosa — página funciona sem dados do banco
       } finally {
@@ -163,6 +176,8 @@ export default function FornecedoresPage() {
           cidade: db.cidade,
           orcamento: db.orcamento,
           convidados: db.convidados,
+          lat: db.lat,
+          lng: db.lng,
         }),
       });
       const data = await res.json();

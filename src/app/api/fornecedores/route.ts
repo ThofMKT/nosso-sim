@@ -1,14 +1,34 @@
+import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest, NextResponse } from "next/server";
 
-type SerperPlace = {
-  title: string;
-  address?: string;
-  rating?: number;
-  ratingCount?: number;
-  category?: string;
-  phoneNumber?: string;
-  website?: string;
-  description?: string;
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+type Fornecedor = {
+  nome: string;
+  especialidade: string;
+  bairro: string;
+  descricao: string;
+  precoMin: number;
+  precoMax: number;
+  avaliacao: number;
+  telefone: string | null;
+  whatsapp: string | null;
+  instagram: null;
+  site: string | null;
+  adequado: boolean;
+  reviewCount: number | null;
+};
+
+// Tags do OSM por categoria
+const CATEGORIA_OSM: Record<string, string[]> = {
+  Fotografia: ['["craft"="photographer"]', '["shop"="photographer"]'],
+  Buffet: ['["amenity"="restaurant"]["catering"="yes"]', '["shop"="catering"]', '["amenity"="catering"]'],
+  Decoração: ['["shop"="florist"]', '["craft"="florist"]'],
+  Música: ['["amenity"="music_school"]', '["shop"="musical_instrument"]'],
+  Bolo: ['["shop"="confectionery"]', '["shop"="bakery"]', '["craft"="confectionery"]'],
+  Cerimonialista: ['["office"="event_organiser"]', '["office"="wedding_planner"]'],
+  Beleza: ['["shop"="beauty"]', '["shop"="hairdresser"]'],
+  Transporte: ['["amenity"="car_rental"]'],
 };
 
 const CATEGORIA_QUERIES: Record<string, string> = {
@@ -27,8 +47,8 @@ function formatPhone(phone?: string): string | null {
   const digits = phone.replace(/\D/g, "");
   if (digits.length < 8) return null;
   const local = digits.startsWith("55") ? digits.slice(2) : digits;
-  if (local.length === 11) return `(${local.slice(0,2)}) ${local.slice(2,7)}-${local.slice(7)}`;
-  if (local.length === 10) return `(${local.slice(0,2)}) ${local.slice(2,6)}-${local.slice(6)}`;
+  if (local.length === 11) return `(${local.slice(0, 2)}) ${local.slice(2, 7)}-${local.slice(7)}`;
+  if (local.length === 10) return `(${local.slice(0, 2)}) ${local.slice(2, 6)}-${local.slice(6)}`;
   return phone;
 }
 
@@ -36,73 +56,107 @@ function formatWhatsApp(phone?: string): string | null {
   if (!phone) return null;
   const digits = phone.replace(/\D/g, "");
   if (digits.length < 8) return null;
-  if (digits.startsWith("55")) return digits;
-  return "55" + digits;
+  return digits.startsWith("55") ? digits : "55" + digits;
 }
 
-function extrairBairro(address?: string, cidade?: string): string {
-  if (!address) return cidade ?? "";
-  const partes = address.split(",").map(s => s.trim());
-  if (partes.length >= 2) return partes[1];
-  return partes[0];
+async function buscarOverpass(lat: number, lng: number, categoria: string): Promise<Fornecedor[]> {
+  const tagsFiltros = CATEGORIA_OSM[categoria];
+  if (!tagsFiltros) return [];
+
+  const raio = 20000;
+  const blocos = tagsFiltros.map(f => [
+    `node${f}(around:${raio},${lat},${lng});`,
+    `way${f}(around:${raio},${lat},${lng});`,
+  ].join("\n")).join("\n");
+
+  const query = `[out:json][timeout:20];\n(\n${blocos}\n);\nout body center 15;`;
+
+  const res = await fetch("https://overpass-api.de/api/interpreter", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: `data=${encodeURIComponent(query)}`,
+    signal: AbortSignal.timeout(22000),
+  });
+
+  if (!res.ok) return [];
+
+  const data = await res.json();
+  const elementos: { tags: Record<string, string> }[] = data.elements ?? [];
+
+  return elementos
+    .filter(e => e.tags?.name)
+    .slice(0, 8)
+    .map(e => {
+      const tags = e.tags;
+      const phone = tags["phone"] ?? tags["contact:phone"] ?? tags["contact:mobile"];
+      const website = tags["website"] ?? tags["contact:website"];
+      const bairro = tags["addr:suburb"] ?? tags["addr:district"] ?? tags["addr:city"] ?? "";
+
+      return {
+        nome: tags.name,
+        especialidade: tags["description"] ?? categoria,
+        bairro,
+        descricao: tags["note"] ?? `Especialista em ${categoria.toLowerCase()} para casamentos`,
+        precoMin: 0,
+        precoMax: 0,
+        avaliacao: 0,
+        telefone: formatPhone(phone),
+        whatsapp: formatWhatsApp(phone),
+        instagram: null,
+        site: website ?? null,
+        adequado: true,
+        reviewCount: null,
+      };
+    });
+}
+
+async function buscarClaude(categoria: string, cidade: string): Promise<Fornecedor[]> {
+  const prompt = `Você é especialista em fornecedores de casamento no Brasil.
+Sugira 6 fornecedores da categoria "${categoria}" em "${cidade}".
+
+REGRAS:
+- Prefira nomes reais e conhecidos; se não souber, use nomes genéricos plausíveis da região
+- NÃO invente telefones, instagram, whatsapp ou sites — deixe null
+- Preço: estimativas realistas em números inteiros (sem R$)
+
+JSON válido (array), sem markdown:
+[{"nome":"...","especialidade":"...","bairro":"...","descricao":"...","precoMin":2000,"precoMax":8000,"avaliacao":4.5,"telefone":null,"whatsapp":null,"instagram":null,"site":null,"adequado":true,"reviewCount":null}]`;
+
+  const message = await client.messages.create({
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 2048,
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  const raw = (message.content[0] as { type: string; text: string }).text.trim();
+  const match = raw.match(/\[[\s\S]*\]/);
+  if (!match) throw new Error("JSON inválido");
+  return JSON.parse(match[0]) as Fornecedor[];
 }
 
 export async function POST(req: NextRequest) {
-  const { categoria, cidade } = await req.json();
+  const { categoria, cidade, lat, lng } = await req.json();
 
-  if (!process.env.SERPER_API_KEY) {
-    return NextResponse.json(
-      { error: "Chave de busca não configurada no servidor. Contate o administrador." },
-      { status: 500 }
-    );
+  // 1. Tenta Overpass (dados reais do OpenStreetMap)
+  if (lat && lng) {
+    try {
+      const fornecedores = await buscarOverpass(lat, lng, categoria);
+      if (fornecedores.length >= 3) {
+        return NextResponse.json({ fornecedores, fonte: "openstreetmap" });
+      }
+    } catch (err) {
+      console.warn("Overpass falhou para fornecedores, usando Claude:", err);
+    }
   }
 
-  const queryBase = CATEGORIA_QUERIES[categoria] ?? `${categoria} casamento`;
-  const query = `${queryBase} ${cidade}`;
-
+  // 2. Fallback: Claude
   try {
-    const res = await fetch("https://google.serper.dev/places", {
-      method: "POST",
-      headers: {
-        "X-API-KEY": process.env.SERPER_API_KEY,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ q: query, gl: "br", hl: "pt-br", num: 10 }),
-    });
-
-    if (!res.ok) throw new Error(`Serper error: ${res.status}`);
-
-    const data = await res.json();
-    const places: SerperPlace[] = data.places ?? [];
-
-    if (places.length === 0) {
-      return NextResponse.json(
-        { error: `Nenhum fornecedor de ${categoria} encontrado em "${cidade}". Tente buscar em uma cidade maior próxima.` },
-        { status: 404 }
-      );
-    }
-
-    const fornecedores = places.slice(0, 8).map((p) => ({
-      nome: p.title,
-      especialidade: p.category ?? categoria,
-      bairro: extrairBairro(p.address, cidade),
-      descricao: p.description ?? `${p.category ?? categoria} em ${cidade}`,
-      precoMin: 0,
-      precoMax: 0,
-      avaliacao: p.rating ?? 0,
-      telefone: formatPhone(p.phoneNumber),
-      whatsapp: formatWhatsApp(p.phoneNumber),
-      instagram: null,
-      site: p.website ?? null,
-      adequado: (p.rating ?? 0) >= 4.3,
-      reviewCount: p.ratingCount ?? null,
-    }));
-
-    return NextResponse.json({ fornecedores });
+    const fornecedores = await buscarClaude(categoria, cidade);
+    return NextResponse.json({ fornecedores, fonte: "ia" });
   } catch (err) {
     console.error("Erro API fornecedores:", err);
     return NextResponse.json(
-      { error: "Não consegui buscar fornecedores agora. Tente novamente em instantes." },
+      { error: "Não consegui buscar fornecedores agora. Tente novamente." },
       { status: 500 }
     );
   }

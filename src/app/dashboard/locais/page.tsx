@@ -36,6 +36,8 @@ type LocalData = {
   cidade: string;
   orcamento: string;
   convidados: string;
+  lat?: number;
+  lng?: number;
   locais: Local[];
   atualizadoEm: string;
 };
@@ -150,7 +152,7 @@ export default function LocaisPage() {
       const res = await fetch("/api/locais", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cidade, orcamento, convidados }),
+        body: JSON.stringify({ cidade, orcamento, convidados, lat: coords?.lat, lng: coords?.lng }),
       });
       const data = await res.json();
       if (!res.ok || data.error) {
@@ -170,6 +172,8 @@ export default function LocaisPage() {
           cidade,
           orcamento,
           convidados,
+          lat: coords?.lat,
+          lng: coords?.lng,
           locais: locaisComMarcacoes,
           atualizadoEm: new Date().toISOString(),
         };
