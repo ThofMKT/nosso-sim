@@ -19,44 +19,66 @@ type Fornecedor = {
   reviewCount: number | null;
 };
 
-// ─── 1. Google Custom Search ──────────────────────────────────────────────────
+// ─── 1. Google Places API (resultados reais do Google Maps) ──────────────────
 
-function limparNome(titulo: string): string {
-  return titulo.replace(/\s*[\-|–|·|•]\s*.{0,50}$/, "").trim().slice(0, 60);
-}
+type PlaceResult = {
+  displayName?: { text: string };
+  formattedAddress?: string;
+  nationalPhoneNumber?: string;
+  rating?: number;
+  userRatingCount?: number;
+  websiteUri?: string;
+  types?: string[];
+};
 
-async function buscarGoogle(categoria: string, cidade: string): Promise<Fornecedor[]> {
+async function buscarGooglePlaces(categoria: string, cidade: string): Promise<Fornecedor[]> {
   const key = process.env.GOOGLE_CSE_KEY;
-  const cx = process.env.GOOGLE_CSE_CX;
-  if (!key || !cx) return [];
+  if (!key) return [];
 
   const query = `${CATEGORIA_QUERIES[categoria] ?? categoria} ${cidade}`;
-  const url = `https://www.googleapis.com/customsearch/v1?key=${key}&cx=${cx}&q=${encodeURIComponent(query)}&gl=br&hl=pt-BR&num=8`;
 
-  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": key,
+      "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.rating,places.userRatingCount,places.websiteUri,places.types",
+    },
+    body: JSON.stringify({
+      textQuery: query,
+      languageCode: "pt-BR",
+      regionCode: "BR",
+      maxResultCount: 10,
+    }),
+    signal: AbortSignal.timeout(10000),
+  });
+
   if (!res.ok) return [];
 
   const data = await res.json();
-  const items: { title: string; link: string; snippet: string }[] = data.items ?? [];
+  const places: PlaceResult[] = data.places ?? [];
 
-  return items
-    .filter(item => item.link && !item.link.includes("youtube") && !item.link.includes("facebook"))
+  return places
+    .filter(p => p.displayName?.text)
     .slice(0, 6)
-    .map(item => ({
-      nome: limparNome(item.title),
-      especialidade: categoria,
-      bairro: cidade,
-      descricao: item.snippet.slice(0, 120),
-      precoMin: 0,
-      precoMax: 0,
-      avaliacao: 0,
-      telefone: null,
-      whatsapp: null,
-      instagram: null,
-      site: item.link,
-      adequado: true,
-      reviewCount: null,
-    }));
+    .map(p => {
+      const phone = p.nationalPhoneNumber ?? undefined;
+      return {
+        nome: p.displayName!.text,
+        especialidade: categoria,
+        bairro: cidade,
+        descricao: p.formattedAddress ?? `Especialista em ${categoria.toLowerCase()} para casamentos`,
+        precoMin: 0,
+        precoMax: 0,
+        avaliacao: p.rating ?? 0,
+        telefone: formatPhone(phone),
+        whatsapp: formatWhatsApp(phone),
+        instagram: null,
+        site: p.websiteUri ?? null,
+        adequado: true,
+        reviewCount: p.userRatingCount ?? null,
+      };
+    });
 }
 
 // Tags do OSM por categoria
@@ -177,11 +199,11 @@ JSON válido (array), sem markdown:
 export async function POST(req: NextRequest) {
   const { categoria, cidade, lat, lng } = await req.json();
 
-  // 1. Google Custom Search (resultados reais)
+  // 1. Google Places API (resultados reais do Google Maps)
   try {
-    const google = await buscarGoogle(categoria, cidade);
+    const google = await buscarGooglePlaces(categoria, cidade);
     if (google.length >= 3) return NextResponse.json({ fornecedores: google, fonte: "google" });
-  } catch (e) { console.warn("Google CSE falhou para fornecedores:", e); }
+  } catch (e) { console.warn("Google Places falhou para fornecedores:", e); }
 
   // 2. OpenStreetMap Overpass (gratuito, sem chave)
   if (lat && lng) {

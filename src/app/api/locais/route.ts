@@ -54,42 +54,63 @@ function formatWhatsApp(phone?: string): string | null {
   return digits.startsWith("55") ? digits : "55" + digits;
 }
 
-// ─── 1. Google Custom Search (gratuito, 100/dia) ──────────────────────────────
+// ─── 1. Google Places API (resultados reais do Google Maps) ──────────────────
 
-async function buscarGoogle(cidade: string, convidados: string): Promise<Local[]> {
+type PlaceResult = {
+  displayName?: { text: string };
+  formattedAddress?: string;
+  nationalPhoneNumber?: string;
+  rating?: number;
+  userRatingCount?: number;
+  websiteUri?: string;
+  types?: string[];
+};
+
+async function buscarGooglePlaces(cidade: string): Promise<Local[]> {
   const key = process.env.GOOGLE_CSE_KEY;
-  const cx = process.env.GOOGLE_CSE_CX;
-  if (!key || !cx) return [];
+  if (!key) return [];
 
-  const query = `espaço para casamento ${cidade} salão festa evento`;
-  const url = `https://www.googleapis.com/customsearch/v1?key=${key}&cx=${cx}&q=${encodeURIComponent(query)}&gl=br&hl=pt-BR&num=8`;
+  const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": key,
+      "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.rating,places.userRatingCount,places.websiteUri,places.types",
+    },
+    body: JSON.stringify({
+      textQuery: `espaço para casamento ${cidade}`,
+      languageCode: "pt-BR",
+      regionCode: "BR",
+      maxResultCount: 10,
+    }),
+    signal: AbortSignal.timeout(10000),
+  });
 
-  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
   if (!res.ok) return [];
 
   const data = await res.json();
-  const items: { title: string; link: string; snippet: string; pagemap?: Record<string, unknown> }[] = data.items ?? [];
+  const places: PlaceResult[] = data.places ?? [];
 
-  return items
-    .filter(item => item.link && !item.link.includes("youtube") && !item.link.includes("facebook"))
+  return places
+    .filter(p => p.displayName?.text)
     .slice(0, 6)
-    .map(item => {
-      const nome = limparNome(item.title);
+    .map(p => {
+      const phone = p.nationalPhoneNumber ?? undefined;
       return {
-        nome,
-        tipo: inferirTipo(nome + " " + item.snippet),
+        nome: p.displayName!.text,
+        tipo: inferirTipo(p.displayName!.text + " " + (p.types?.join(" ") ?? "")),
         bairro: cidade,
-        endereco: null,
+        endereco: p.formattedAddress ?? null,
         capacidade: "Consultar",
         faixaPreco: "A consultar",
-        destaque: item.snippet.slice(0, 120),
-        telefone: null,
-        whatsapp: null,
+        destaque: p.formattedAddress ?? `Espaço para eventos em ${cidade}`,
+        telefone: formatPhone(phone),
+        whatsapp: formatWhatsApp(phone),
         instagram: null,
-        site: item.link,
+        site: p.websiteUri ?? null,
         adequado: true,
-        rating: null,
-        reviewCount: null,
+        rating: p.rating ?? null,
+        reviewCount: p.userRatingCount ?? null,
       };
     });
 }
@@ -189,11 +210,11 @@ Responda APENAS JSON válido (sem markdown):
 export async function POST(req: NextRequest) {
   const { cidade, orcamento, convidados, lat, lng } = await req.json();
 
-  // Tentativa 1: Google Custom Search (dados reais do Google)
+  // Tentativa 1: Google Places API (dados reais do Google Maps)
   try {
-    const google = await buscarGoogle(cidade, convidados);
+    const google = await buscarGooglePlaces(cidade);
     if (google.length >= 3) return NextResponse.json({ locais: google, fonte: "google" });
-  } catch (e) { console.warn("Google CSE falhou:", e); }
+  } catch (e) { console.warn("Google Places falhou:", e); }
 
   // Tentativa 2: OpenStreetMap Overpass (dados reais, gratuito)
   if (lat && lng) {
