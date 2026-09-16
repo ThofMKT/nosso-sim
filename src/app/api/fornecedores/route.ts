@@ -19,6 +19,46 @@ type Fornecedor = {
   reviewCount: number | null;
 };
 
+// ─── 1. Google Custom Search ──────────────────────────────────────────────────
+
+function limparNome(titulo: string): string {
+  return titulo.replace(/\s*[\-|–|·|•]\s*.{0,50}$/, "").trim().slice(0, 60);
+}
+
+async function buscarGoogle(categoria: string, cidade: string): Promise<Fornecedor[]> {
+  const key = process.env.GOOGLE_CSE_KEY;
+  const cx = process.env.GOOGLE_CSE_CX;
+  if (!key || !cx) return [];
+
+  const query = `${CATEGORIA_QUERIES[categoria] ?? categoria} ${cidade}`;
+  const url = `https://www.googleapis.com/customsearch/v1?key=${key}&cx=${cx}&q=${encodeURIComponent(query)}&gl=br&hl=pt-BR&num=8`;
+
+  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) return [];
+
+  const data = await res.json();
+  const items: { title: string; link: string; snippet: string }[] = data.items ?? [];
+
+  return items
+    .filter(item => item.link && !item.link.includes("youtube") && !item.link.includes("facebook"))
+    .slice(0, 6)
+    .map(item => ({
+      nome: limparNome(item.title),
+      especialidade: categoria,
+      bairro: cidade,
+      descricao: item.snippet.slice(0, 120),
+      precoMin: 0,
+      precoMax: 0,
+      avaliacao: 0,
+      telefone: null,
+      whatsapp: null,
+      instagram: null,
+      site: item.link,
+      adequado: true,
+      reviewCount: null,
+    }));
+}
+
 // Tags do OSM por categoria
 const CATEGORIA_OSM: Record<string, string[]> = {
   Fotografia: ['["craft"="photographer"]', '["shop"="photographer"]'],
@@ -137,19 +177,23 @@ JSON válido (array), sem markdown:
 export async function POST(req: NextRequest) {
   const { categoria, cidade, lat, lng } = await req.json();
 
-  // 1. Tenta Overpass (dados reais do OpenStreetMap)
+  // 1. Google Custom Search (resultados reais)
+  try {
+    const google = await buscarGoogle(categoria, cidade);
+    if (google.length >= 3) return NextResponse.json({ fornecedores: google, fonte: "google" });
+  } catch (e) { console.warn("Google CSE falhou para fornecedores:", e); }
+
+  // 2. OpenStreetMap Overpass (gratuito, sem chave)
   if (lat && lng) {
     try {
-      const fornecedores = await buscarOverpass(lat, lng, categoria);
-      if (fornecedores.length >= 3) {
-        return NextResponse.json({ fornecedores, fonte: "openstreetmap" });
-      }
+      const osm = await buscarOverpass(lat, lng, categoria);
+      if (osm.length >= 3) return NextResponse.json({ fornecedores: osm, fonte: "openstreetmap" });
     } catch (err) {
-      console.warn("Overpass falhou para fornecedores, usando Claude:", err);
+      console.warn("Overpass falhou para fornecedores:", err);
     }
   }
 
-  // 2. Fallback: Claude
+  // 3. Claude (sugestões sem inventar contatos)
   try {
     const fornecedores = await buscarClaude(categoria, cidade);
     return NextResponse.json({ fornecedores, fonte: "ia" });

@@ -3,8 +3,6 @@ import { NextRequest, NextResponse } from "next/server";
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// ── Tipos ────────────────────────────────────────────────────────────────────
-
 type Local = {
   nome: string;
   tipo: string;
@@ -22,16 +20,21 @@ type Local = {
   reviewCount: number | null;
 };
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function inferirTipo(tags: Record<string, string>): string {
-  const texto = JSON.stringify(tags).toLowerCase();
-  if (texto.includes("fazenda") || texto.includes("farm") || texto.includes("chácara") || texto.includes("sítio")) return "Fazenda";
-  if (texto.includes("haras") || texto.includes("ranch")) return "Haras";
-  if (texto.includes("hotel") || texto.includes("resort")) return "Hotel";
-  if (texto.includes("jardim") || texto.includes("garden")) return "Jardim";
-  if (texto.includes("clube") || texto.includes("club")) return "Clube";
+function inferirTipo(texto: string): string {
+  const t = texto.toLowerCase();
+  if (t.includes("fazenda") || t.includes("chácara") || t.includes("sítio")) return "Fazenda";
+  if (t.includes("haras")) return "Haras";
+  if (t.includes("jardim") || t.includes("garden")) return "Jardim";
+  if (t.includes("clube") || t.includes("club")) return "Clube";
+  if (t.includes("hotel") || t.includes("resort")) return "Hotel";
   return "Salão";
+}
+
+function limparNome(titulo: string): string {
+  // Remove sufixos comuns de sites: "Nome | Casamentos", "Nome - Site Oficial", etc.
+  return titulo.replace(/\s*[\-|–|·|•]\s*.{0,50}$/, "").trim().slice(0, 60);
 }
 
 function formatPhone(phone?: string): string | null {
@@ -51,19 +54,50 @@ function formatWhatsApp(phone?: string): string | null {
   return digits.startsWith("55") ? digits : "55" + digits;
 }
 
-function montarEndereco(tags: Record<string, string>): string | null {
-  const rua = tags["addr:street"];
-  const num = tags["addr:housenumber"];
-  const bairro = tags["addr:suburb"] ?? tags["addr:district"];
-  const cidade = tags["addr:city"];
-  const partes = [rua && num ? `${rua}, ${num}` : rua, bairro, cidade].filter(Boolean);
-  return partes.length > 0 ? partes.join(" — ") : null;
+// ─── 1. Google Custom Search (gratuito, 100/dia) ──────────────────────────────
+
+async function buscarGoogle(cidade: string, convidados: string): Promise<Local[]> {
+  const key = process.env.GOOGLE_CSE_KEY;
+  const cx = process.env.GOOGLE_CSE_CX;
+  if (!key || !cx) return [];
+
+  const query = `espaço para casamento ${cidade} salão festa evento`;
+  const url = `https://www.googleapis.com/customsearch/v1?key=${key}&cx=${cx}&q=${encodeURIComponent(query)}&gl=br&hl=pt-BR&num=8`;
+
+  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) return [];
+
+  const data = await res.json();
+  const items: { title: string; link: string; snippet: string; pagemap?: Record<string, unknown> }[] = data.items ?? [];
+
+  return items
+    .filter(item => item.link && !item.link.includes("youtube") && !item.link.includes("facebook"))
+    .slice(0, 6)
+    .map(item => {
+      const nome = limparNome(item.title);
+      return {
+        nome,
+        tipo: inferirTipo(nome + " " + item.snippet),
+        bairro: cidade,
+        endereco: null,
+        capacidade: "Consultar",
+        faixaPreco: "A consultar",
+        destaque: item.snippet.slice(0, 120),
+        telefone: null,
+        whatsapp: null,
+        instagram: null,
+        site: item.link,
+        adequado: true,
+        rating: null,
+        reviewCount: null,
+      };
+    });
 }
 
-// ── Overpass API (gratuita, sem chave) ───────────────────────────────────────
+// ─── 2. Overpass / OpenStreetMap (gratuito, sem chave) ────────────────────────
 
 async function buscarOverpass(lat: number, lng: number): Promise<Local[]> {
-  const raio = 30000; // 30km
+  const raio = 30000;
   const query = `
     [out:json][timeout:20];
     (
@@ -75,7 +109,6 @@ async function buscarOverpass(lat: number, lng: number): Promise<Local[]> {
       way["wedding"="venue"](around:${raio},${lat},${lng});
       node["leisure"="resort"]["name"](around:${raio},${lat},${lng});
       way["leisure"="resort"]["name"](around:${raio},${lat},${lng});
-      node["tourism"="resort"]["name"](around:${raio},${lat},${lng});
     );
     out body center 20;
   `;
@@ -86,11 +119,10 @@ async function buscarOverpass(lat: number, lng: number): Promise<Local[]> {
     body: `data=${encodeURIComponent(query)}`,
     signal: AbortSignal.timeout(22000),
   });
-
   if (!res.ok) return [];
 
   const data = await res.json();
-  const elementos: { tags: Record<string, string>; lat?: number; lon?: number; center?: { lat: number; lon: number } }[] = data.elements ?? [];
+  const elementos: { tags: Record<string, string> }[] = data.elements ?? [];
 
   return elementos
     .filter(e => e.tags?.name)
@@ -99,17 +131,15 @@ async function buscarOverpass(lat: number, lng: number): Promise<Local[]> {
       const tags = e.tags;
       const phone = tags["phone"] ?? tags["contact:phone"] ?? tags["contact:mobile"];
       const website = tags["website"] ?? tags["contact:website"];
-      const bairro = tags["addr:suburb"] ?? tags["addr:district"] ?? tags["addr:city"] ?? "";
-      const destaque = tags["description"] ?? tags["note"] ?? `${inferirTipo(tags)} para eventos em ${tags["addr:city"] ?? "sua cidade"}`;
-
+      const partes = [tags["addr:street"] && tags["addr:housenumber"] ? `${tags["addr:street"]}, ${tags["addr:housenumber"]}` : null, tags["addr:suburb"], tags["addr:city"]].filter(Boolean);
       return {
         nome: tags.name,
-        tipo: inferirTipo(tags),
-        bairro,
-        endereco: montarEndereco(tags),
+        tipo: inferirTipo(tags.name + " " + (tags.amenity ?? "")),
+        bairro: tags["addr:suburb"] ?? tags["addr:city"] ?? "",
+        endereco: partes.join(" — ") || null,
         capacidade: tags["capacity"] ? `até ${tags["capacity"]} pessoas` : "Consultar",
         faixaPreco: "A consultar",
-        destaque,
+        destaque: tags["description"] ?? `Espaço para eventos em ${tags["addr:city"] ?? "sua cidade"}`,
         telefone: formatPhone(phone),
         whatsapp: formatWhatsApp(phone),
         instagram: null,
@@ -121,25 +151,26 @@ async function buscarOverpass(lat: number, lng: number): Promise<Local[]> {
     });
 }
 
-// ── Claude como fallback ─────────────────────────────────────────────────────
+// ─── 3. Claude fallback (com prompt rigoroso, sem inventar) ──────────────────
 
 async function buscarClaude(cidade: string, convidados: string, orcamento: string): Promise<Local[]> {
-  const orcamentoLabel: Record<string, string> = {
-    "15000": "até R$ 15 mil", "30000": "R$ 15–30 mil",
-    "60000": "R$ 30–60 mil", "100000": "R$ 60–100 mil", "150000": "acima de R$ 100 mil",
+  const orcLabel: Record<string, string> = {
+    "15000": "até R$15mil", "30000": "R$15–30mil", "60000": "R$30–60mil",
+    "100000": "R$60–100mil", "150000": "acima de R$100mil",
   };
 
-  const prompt = `Você é especialista em casamentos no Brasil.
-Sugira 6 espaços DEDICADOS a casamentos em "${cidade}" para ${convidados} convidados com orçamento ${orcamentoLabel[orcamento] ?? orcamento}.
+  const prompt = `Você é especialista em casamentos no Brasil com conhecimento de espaços por cidade.
 
-REGRAS:
-- APENAS salões de festa, fazendas, haras, jardins, clubes — NÃO hotéis ou restaurantes comuns
-- Prefira espaços conhecidos; se não souber nomes reais, use nomes genéricos plausíveis da região
-- NÃO invente telefones, instagram, whatsapp ou sites — deixe null
-- Capacidade e faixa de preço podem ser estimativas realistas
+Sugira 6 espaços para casamento em "${cidade}" para ${convidados} convidados, orçamento ${orcLabel[orcamento] ?? orcamento}.
 
-JSON válido (array), sem markdown:
-[{"nome":"...","tipo":"Salão","bairro":"...","endereco":null,"capacidade":"até 200 pessoas","faixaPreco":"R$ 8.000–15.000","destaque":"...","telefone":null,"whatsapp":null,"instagram":null,"site":null,"adequado":true,"rating":null,"reviewCount":null}]`;
+REGRAS ABSOLUTAS:
+1. APENAS salões, fazendas, haras, jardins, clubes — NUNCA hotéis ou restaurantes
+2. Se souber nomes REAIS e conhecidos da cidade, use-os. Se não souber, diga "Salão [Estilo] [Bairro típico de ${cidade}]"
+3. NUNCA invente telefone, whatsapp, instagram ou site — sempre null
+4. Capacidade e preço devem ser estimativas realistas para a região
+
+Responda APENAS JSON válido (sem markdown):
+[{"nome":"...","tipo":"Salão","bairro":"...","endereco":null,"capacidade":"até 200 pessoas","faixaPreco":"R$8.000–15.000","destaque":"...","telefone":null,"whatsapp":null,"instagram":null,"site":null,"adequado":true,"rating":null,"reviewCount":null}]`;
 
   const message = await client.messages.create({
     model: "claude-haiku-4-5-20251001",
@@ -153,32 +184,31 @@ JSON válido (array), sem markdown:
   return JSON.parse(match[0]) as Local[];
 }
 
-// ── Handler principal ─────────────────────────────────────────────────────────
+// ─── Handler ──────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
   const { cidade, orcamento, convidados, lat, lng } = await req.json();
 
-  // 1. Tenta Overpass (dados reais do OpenStreetMap — gratuito)
+  // Tentativa 1: Google Custom Search (dados reais do Google)
+  try {
+    const google = await buscarGoogle(cidade, convidados);
+    if (google.length >= 3) return NextResponse.json({ locais: google, fonte: "google" });
+  } catch (e) { console.warn("Google CSE falhou:", e); }
+
+  // Tentativa 2: OpenStreetMap Overpass (dados reais, gratuito)
   if (lat && lng) {
     try {
-      const locais = await buscarOverpass(lat, lng);
-      if (locais.length >= 3) {
-        return NextResponse.json({ locais, fonte: "openstreetmap" });
-      }
-    } catch (err) {
-      console.warn("Overpass falhou, usando Claude:", err);
-    }
+      const osm = await buscarOverpass(lat, lng);
+      if (osm.length >= 3) return NextResponse.json({ locais: osm, fonte: "openstreetmap" });
+    } catch (e) { console.warn("Overpass falhou:", e); }
   }
 
-  // 2. Fallback: Claude com prompt melhorado
+  // Tentativa 3: Claude (sugestões inteligentes sem inventar contatos)
   try {
-    const locais = await buscarClaude(cidade, convidados, orcamento);
-    return NextResponse.json({ locais, fonte: "ia" });
-  } catch (err) {
-    console.error("Claude também falhou:", err);
-    return NextResponse.json(
-      { error: "Não consegui buscar espaços agora. Tente novamente." },
-      { status: 500 }
-    );
+    const ia = await buscarClaude(cidade, convidados, orcamento);
+    return NextResponse.json({ locais: ia, fonte: "ia" });
+  } catch (e) {
+    console.error("Todas as fontes falharam:", e);
+    return NextResponse.json({ error: "Não consegui buscar espaços agora. Tente novamente." }, { status: 500 });
   }
 }
